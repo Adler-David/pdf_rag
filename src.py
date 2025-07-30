@@ -173,7 +173,7 @@ def instant_sentece_transformer_embedder(embedding_model):
 
 
 
-def embed_on_ollama(text, model="bge-m3", ollama_url="http://25.12.119.117:11435", timeout=30):
+def embed_with_ollama(text, ollama_url="http://25.12.119.117:11435", model="bge-m3", timeout=30):
     try:
         # Prepare the request payload
         payload = {
@@ -199,7 +199,7 @@ def embed_on_ollama(text, model="bge-m3", ollama_url="http://25.12.119.117:11435
         # Parse the response and extract the embedding
         result = response.json()
         print(result)
-        embedding = result.get("embedding")
+        embedding = result.["embedding"][0]
         
         if len(embedding) == 0:
             print("Error: No embedding found in response")
@@ -235,17 +235,20 @@ def embedd(chunk, embedder):
 
 
 def form_metadata_for_chunk(index, chunk):
-        metadata = {
-        'chunk_info': {
-            'index': index,
-            'text_length': len(chunk.text),
-            'text_content': chunk.text,
-            'items': [{"id":i.self_ref, "parent":i.parent.cref, "children":[c.cref for c in i.children], "label":i.label, "page_number":i.prov[0].page_no} for i in chunk.meta.doc_items],
-            "headings": chunk.meta.headings,
-            "captions": chunk.meta.captions,
-            "origin_doc": chunk.meta.origin.filename 
+    metadata = {
+    'chunk_info': {
+        'index': index,
+        'text_length': len(chunk.text),
+        'text_content': chunk.text,
+        'items': [{"id":i.self_ref, "parent":i.parent.cref, "children":[c.cref for c in i.children], "label":i.label, "page_number":i.prov[0].page_no} for i in chunk.meta.doc_items],
+        "headings": chunk.meta.headings,
+        "captions": chunk.meta.captions,
+        "origin_doc": chunk.meta.origin.filename 
         }
     }
+    return metadata
+
+
 def create_point_struct_for_qdrant(vector, metadata):
     # if hasattr(chunk, 'meta') and chunk.meta:
     #     meta_dict = {}
@@ -337,8 +340,8 @@ def instant_qdarant_client():
     client = QdrantClient("localhost", port=6333)
     return client
 
-def instant_local_milvus_client():
-    milvus_client = MilvusClient(uri=MILVUS_LOCATION)
+def instant_milvus_client(milvus_uri):
+    milvus_client = MilvusClient(uri=milvus_uri)
     return milvus_client
 
 
@@ -359,18 +362,14 @@ def create_qdrant_collection(collection_name, client, embedder):
     else:
         print(f"Collection '{collection_name}' already exists")
 
-def create_milvus_collection(milvus_client, collection_name):
-    # embedding_dim = embedder.get_sentence_embedding_dimension()
-    # embedding_dim = embedder.get_embedding_dimension()
-    if milvus_client.has_collection(collection_name):
-        milvus_client.drop_collection(collection_name)
-        
-    milvus_client.create_collection(
-        collection_name=collection_name,
-        dimension=1024,
-        metric_type="IP",  # Inner product distance
-        consistency_level="Bounded",  # Supported values are (`"Strong"`, `"Session"`, `"Bounded"`, `"Eventually"`). See https://milvus.io/docs/consistency.md#Consistency-Level for more details.
-    )
+def create_milvus_collection(milvus_client, collection_name, embedding_dim):
+    if not milvus_client.has_collection(collection_name):
+        milvus_client.create_collection(
+            collection_name=collection_name,
+            dimension=embedding_dim,
+            metric_type="IP",  # Inner product distance
+            consistency_level="Bounded",  # Supported values are (`"Strong"`, `"Session"`, `"Bounded"`, `"Eventually"`). See https://milvus.io/docs/consistency.md#Consistency-Level for more details.
+        )
 
 
 def insert_points_to_qdrant(client, collection_name, points):
@@ -403,13 +402,98 @@ def pdf_to_milvus(pdf, embedding_model, collection_name):
         if embedder:
             vector = embedd(enriched_text, embedder)
         else:
-            vector = embed_on_ollama(enriched_text)
+            vector = embed_with_ollama(enriched_text)
         metadata = form_metadata_for_chunk(index, ch)
         print(f'chunk metadata:{metadata}')
         data.append({"id": index, "vector": vector, "text": enriched_text, "metadata": metadata})
-    client = instant_local_milvus_client()
-    create_milvus_collection(client, collection_name)
+    client = instant_milvus_client(milvus_uri="http://localhost:19530")
+    if embedder:
+        embedding_dim = embedder.get_sentence_embedding_dimension()
+    else:
+        embedding_dim = None #to be done
+    # embedding_dim = embedder.get_embedding_dimension()
+    create_milvus_collection(client, collection_name, embedding_dim)
     insert_data_to_milvus(client, collection_name, data)
+    
+    # "http://localhost:19530"
+def pdf_to_milvus_with_ollama(pdf, ollama_url, embedding_model, embedding_dim, milvus_url, collection_name):
+    conv_res = extract_elements_from_pdf(pdf)
+    chunks = chunk(conv_res, embedding_model)
+    data = []
+    for index, ch in enumerate(chunks):
+        print(f"=== {index} ===")
+        print(f"chunk.text:\n{f'{ch.text}'!r}")
+        enriched_text = contextualize(ch, embedding_model)
+        print(f"chunker.contextualize(chunk):\n{f'{enriched_text}'!r}")
+        print()
+        vector = embed_with_ollama(enriched_text, ollama_url, embedding_model)
+        metadata = form_metadata_for_chunk(index, ch)
+        print(f'chunk metadata:{metadata}')
+        data.append({"id": index, "vector": vector, "text": enriched_text, "metadata": metadata})
+    client = instant_milvus_client(milvus_url=milvus_url)
+    create_milvus_collection(client, collection_name, embedding_dim)
+    insert_data_to_milvus(client, collection_name, data)
+    
+    
+    
+def retrieve_relevent_chunks_with_sentecne_transformer(question, milvus_client=MILVUS_CLIENT, collection_name=COLLECTION_NAME, embeder=EMBEDER, chunk_limit=3):
+    question = question
+    search_res = milvus_client.search(
+        collection_name=collection_name,
+        data=[embedd(question, embeder)],
+        limit=chunk_limit,
+        search_params={"metric_type": "IP", "params": {}},  # Inner product distance
+        output_fields=["text"],
+    )
+
+    retrieved_lines_with_distances = [
+        (res["entity"]["text"], res["distance"]) for res in search_res[0]
+    ]
+    # print(json.dumps(retrieved_lines_with_distances, indent=4))
+    context = "\n".join(
+        [line_with_distance[0] for line_with_distance in retrieved_lines_with_distances]
+    )
+    user_prompt = f"""
+    Use the following pieces of information enclosed in <context> tags to provide an answer to the question enclosed in <question> tags.
+    <context>
+    {context}
+    </context>
+    <question>
+    {question}
+    </question>
+    """
+    return user_prompt
+
+
+def retrieve_relevent_chunks_with_ollama(question, milvus_client=MILVUS_CLIENT, collection_name=COLLECTION_NAME, ollama_url=OLLAMA_URL, embeding_model=EMBEDDING_MODEL, chunk_limit=3):
+    question = question
+    search_res = milvus_client.search(
+        collection_name=collection_name,
+        data=[embed_with_ollama(question, model=embeding_model, ollama_url=ollama_url, timeout=30)],
+        limit=chunk_limit,
+        search_params={"metric_type": "IP", "params": {}},  # Inner product distance
+        output_fields=["text"],
+    )
+
+    retrieved_lines_with_distances = [
+        (res["entity"]["text"], res["distance"]) for res in search_res[0]
+    ]
+    # print(json.dumps(retrieved_lines_with_distances, indent=4))
+    context = "\n".join(
+        [line_with_distance[0] for line_with_distance in retrieved_lines_with_distances]
+    )
+    
+    user_prompt = f"""
+    Use the following pieces of information enclosed in <context> tags to provide an answer to the question enclosed in <question> tags.
+    <context>
+    {context}
+    </context>
+    <question>
+    {question}
+    </question>
+    """
+    return user_prompt
+
     
 
 
