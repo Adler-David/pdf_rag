@@ -23,10 +23,9 @@ import webbrowser
 import requests
 import json
 from typing import List, Optional
+import os
 
-MILVUS_IP = "http://25.12.119.117"
-MILVUS_PORT = "19530"
-MILVUS_LOCATION = MILVUS_IP+":"+MILVUS_PORT
+
 
 def create_pdf_from_bytes(bytes, file_route):
     with open(file_route, "wb") as f:
@@ -199,7 +198,7 @@ def embed_with_ollama(text, ollama_url="http://25.12.119.117:11435", model="bge-
         # Parse the response and extract the embedding
         result = response.json()
         print(result)
-        embedding = result.["embedding"][0]
+        embedding = result["embedding"][0]
         
         if len(embedding) == 0:
             print("Error: No embedding found in response")
@@ -436,7 +435,11 @@ def pdf_to_milvus_with_ollama(pdf, ollama_url, embedding_model, embedding_dim, m
     
     
     
-def retrieve_relevent_chunks_with_sentecne_transformer(question, milvus_client=MILVUS_CLIENT, collection_name=COLLECTION_NAME, embeder=EMBEDER, chunk_limit=3):
+def retrieve_relevent_chunks_with_sentecne_transformer(question,
+                                                       milvus_client=os.getenv('MILVUS_CLIENT'),
+                                                       collection_name=os.getenv('COLLECTION_NAME'),
+                                                       embeder=os.getenv('EMBEDER'),
+                                                       chunk_limit=3):
     question = question
     search_res = milvus_client.search(
         collection_name=collection_name,
@@ -465,7 +468,12 @@ def retrieve_relevent_chunks_with_sentecne_transformer(question, milvus_client=M
     return user_prompt
 
 
-def retrieve_relevent_chunks_with_ollama(question, milvus_client=MILVUS_CLIENT, collection_name=COLLECTION_NAME, ollama_url=OLLAMA_URL, embeding_model=EMBEDDING_MODEL, chunk_limit=3):
+def retrieve_relevent_chunks_with_ollama(question,
+                                         milvus_client=os.getenv('MILVUS_CLIENT'),
+                                         collection_name=os.getenv('COLLECTION_NAME'),
+                                         ollama_url=os.getenv('OLLAMA_URL'),
+                                         embeding_model=os.getenv('EMBEDDING_MODEL'),
+                                         chunk_limit=3):
     question = question
     search_res = milvus_client.search(
         collection_name=collection_name,
@@ -493,6 +501,7 @@ def retrieve_relevent_chunks_with_ollama(question, milvus_client=MILVUS_CLIENT, 
     </question>
     """
     return user_prompt
+
 
     
 
