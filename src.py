@@ -384,13 +384,11 @@ def insert_data_to_milvus(milvus_client, collection_name, data):
     print("inserted to milvus successfully")
     
     
-def pdf_to_milvus(pdf, embedding_model, collection_name):
+def pdf_to_milvus_with_sentence_transformer(pdf, embedding_model, collection_name):
     conv_res = extract_elements_from_pdf(pdf)
     # embedding_model = "sentence-transformers/all-MiniLM-L6-v2"
     chunks = chunk(conv_res, embedding_model)
-    embedder = None
-    if "sentence-transformers" in embedding_model:
-        embedder = instant_sentece_transformer_embedder(embedding_model=embedding_model)
+    embedder = instant_sentece_transformer_embedder(embedding_model=embedding_model)
     data = []
     for index, ch in enumerate(chunks):
         print(f"=== {index} ===")
@@ -398,18 +396,12 @@ def pdf_to_milvus(pdf, embedding_model, collection_name):
         enriched_text = contextualize(ch, embedding_model)
         print(f"chunker.contextualize(chunk):\n{f'{enriched_text}'!r}")
         print()
-        if embedder:
-            vector = embedd(enriched_text, embedder)
-        else:
-            vector = embed_with_ollama(enriched_text)
+        vector = embedd(enriched_text, embedder)
         metadata = form_metadata_for_chunk(index, ch)
         print(f'chunk metadata:{metadata}')
         data.append({"id": index, "vector": vector, "text": enriched_text, "metadata": metadata})
     client = instant_milvus_client(milvus_uri="http://localhost:19530")
-    if embedder:
-        embedding_dim = embedder.get_sentence_embedding_dimension()
-    else:
-        embedding_dim = None #to be done
+    embedding_dim = embedder.get_sentence_embedding_dimension()
     # embedding_dim = embedder.get_embedding_dimension()
     create_milvus_collection(client, collection_name, embedding_dim)
     insert_data_to_milvus(client, collection_name, data)
@@ -436,11 +428,13 @@ def pdf_to_milvus_with_ollama(pdf, ollama_url, embedding_model, embedding_dim, m
     
     
 def retrieve_relevent_chunks_with_sentecne_transformer(question,
-                                                       milvus_client=os.getenv('MILVUS_CLIENT'),
+                                                       milvus_url=os.getenv('MILVUS_URL'),
                                                        collection_name=os.getenv('COLLECTION_NAME'),
-                                                       embeder=os.getenv('EMBEDER'),
+                                                       embedding_model=os.getenv('EMBEDDING_MODEL'),
                                                        chunk_limit=3):
     question = question
+    milvus_client = instant_milvus_client(milvus_url)
+    embeder = instant_sentece_transformer_embedder(embedding_model)
     search_res = milvus_client.search(
         collection_name=collection_name,
         data=[embedd(question, embeder)],
